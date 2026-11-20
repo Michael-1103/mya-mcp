@@ -1,15 +1,14 @@
-"""Serveur MCP (FastMCP, streamable HTTP) : outils, authentification Bearer et /health."""
+"""Serveur MCP (FastMCP, streamable HTTP) : outils, authentification OAuth 2.1 et /health."""
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import hmac
 import json
 import logging
 from contextlib import asynccontextmanager
 from typing import Literal
 
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
@@ -17,6 +16,7 @@ from starlette.responses import JSONResponse
 
 from . import __version__, db
 from .config import Settings, load_settings
+from .oauth import MyaOAuthProvider
 from .scheduler import Refresher
 
 log = logging.getLogger("mya.server")
@@ -34,7 +34,20 @@ def _clamp(value: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, int(value)))
 
 
-def build_mcp(settings: Settings) -> FastMCP:
+def build_mcp(settings: Settings, provider: MyaOAuthProvider | None = None) -> FastMCP:
+    auth_kwargs: dict = {}
+    if provider is not None:
+        # OAuth 2.1 : le SDK expose /register, /authorize, /token, /revoke et les métadonnées .well-known
+        auth_kwargs = {
+            "auth_server_provider": provider,
+            "auth": AuthSettings(
+                issuer_url=settings.public_url,
+                resource_server_url=settings.resource_url,
+                client_registration_options=ClientRegistrationOptions(enabled=True, default_scopes=["mya"]),
+                revocation_options=RevocationOptions(enabled=True),
+                validate_token_resource=False,
+            ),
+        }
     mcp = FastMCP(
         "mya-epitech",
         instructions=(
@@ -47,8 +60,9 @@ def build_mcp(settings: Settings) -> FastMCP:
         port=settings.port,
         stateless_http=True,
         json_response=True,
-        # L'authentification Bearer et le reverse proxy protègent l'accès
+        # L'accès est protégé par OAuth, et le reverse proxy gère le nom d'hôte
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        **auth_kwargs,
     )
     mcp._mcp_server.version = __version__  # sinon serverInfo affiche la version du SDK
     path = settings.db_path
@@ -201,42 +215,23 @@ def build_mcp(settings: Settings) -> FastMCP:
     return mcp
 
 
-class BearerAuthMiddleware:
-    """Middleware ASGI : exige 'Authorization: Bearer <token>' (comparaison en temps constant).
-
-    /health reste public. Sans token configuré (ALLOW_NO_AUTH=1), tout passe.
-    """
-
-    PUBLIC_PATHS = {"/health"}
-
-    def __init__(self, app, token: str) -> None:
-        self.app = app
-        self._digest = hashlib.sha256(token.encode()).digest() if token else None
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or self._digest is None or scope["path"] in self.PUBLIC_PATHS:
-            return await self.app(scope, receive, send)
-        auth = dict(scope["headers"]).get(b"authorization", b"").decode("latin-1")
-        scheme, _, supplied = auth.partition(" ")
-        ok = scheme.lower() == "bearer" and hmac.compare_digest(
-            hashlib.sha256(supplied.strip().encode()).digest(), self._digest)
-        if not ok:
-            resp = JSONResponse({"error": "unauthorized"}, status_code=401,
-                                headers={"WWW-Authenticate": "Bearer"})
-            return await resp(scope, receive, send)
-        return await self.app(scope, receive, send)
-
-
 def build_app(settings: Settings | None = None) -> Starlette:
     settings = settings or load_settings()
     logging.basicConfig(level=settings.log_level,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # une ligne par requête serait trop bavard
-    if not settings.auth_token:
-        log.warning("ALLOW_NO_AUTH=1 : serveur SANS authentification (usage local uniquement)")
     settings.data_dir.mkdir(parents=True, exist_ok=True)
+    provider = None
+    if settings.oauth_enabled:
+        provider = MyaOAuthProvider(settings.oauth_db_path, settings.public_url, settings.password)
+    else:
+        log.warning("ALLOW_NO_AUTH=1 : serveur SANS authentification (usage local uniquement)")
     refresher = Refresher(settings)
-    mcp = build_mcp(settings)
+    mcp = build_mcp(settings, provider)
+    if provider is not None:
+        # pages de consentement : publiques (le mot de passe est demandé sur la page)
+        mcp.custom_route("/consent", methods=["GET"])(provider.consent_get)
+        mcp.custom_route("/consent", methods=["POST"])(provider.consent_post)
     app = mcp.streamable_http_app()
 
     async def health(_request):
@@ -252,6 +247,15 @@ def build_app(settings: Settings | None = None) -> Starlette:
         })
 
     app.add_route("/health", health, methods=["GET"])
+
+    if provider is not None:
+        async def resource_metadata(_request):
+            # alias à la racine (RFC 9728) : certains clients sondent ce chemin avant celui avec /mcp
+            return JSONResponse({"resource": settings.resource_url,
+                                 "authorization_servers": [settings.public_url],
+                                 "bearer_methods_supported": ["header"]})
+
+        app.add_route("/.well-known/oauth-protected-resource", resource_metadata, methods=["GET"])
 
     original = app.router.lifespan_context
 
@@ -269,7 +273,6 @@ def build_app(settings: Settings | None = None) -> Starlette:
                 pass
 
     app.router.lifespan_context = lifespan
-    app.add_middleware(BearerAuthMiddleware, token=settings.auth_token)
     return app
 
 
@@ -279,7 +282,7 @@ def main() -> None:
     settings = load_settings()
     app = build_app(settings)
     uvicorn.run(app, host=settings.host, port=settings.port, log_level=settings.log_level.lower(),
-                proxy_headers=True, forwarded_allow_ips="*")
+                proxy_headers=True, forwarded_allow_ips=settings.forwarded_allow_ips)
 
 
 if __name__ == "__main__":

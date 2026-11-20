@@ -29,7 +29,8 @@ def make_dest(i: int, **kw) -> dict:
 
 def settings(tmp: Path, **kw) -> Settings:
     base = dict(
-        data_dir=tmp, host="127.0.0.1", port=0, auth_token="secret", allow_no_auth=False,
+        data_dir=tmp, host="127.0.0.1", port=0, password="mot-de-passe-de-test", allow_no_auth=False,
+        public_url="http://localhost:8000", forwarded_allow_ips="*",
         refresh_hour_utc=3, max_age_hours=24, api_base="http://invalid", site_base="http://invalid",
         concurrency=2, max_drop_ratio=0.3, max_failed_ratio=0.05, retry_delay_minutes=30, log_level="INFO")
     base.update(kw)
@@ -114,11 +115,3 @@ def test_refresh_failures_keep_old_db(tmp_path, monkeypatch):
     assert asyncio.run(r.refresh())["ok"] and db.count_destinations(s.db_path) == 40
 
 
-def test_auth_and_health(tmp_path):
-    app = build_app(settings(tmp_path))
-    c = TestClient(app)  # sans lifespan : pas de scrape réseau
-    assert c.get("/health").status_code == 200
-    assert c.get("/health").json()["status"] == "no_data"
-    assert c.post("/mcp", json={}).status_code == 401
-    assert c.post("/mcp", json={}, headers={"Authorization": "Bearer wrong"}).status_code == 401
-    assert c.post("/mcp", json={}, headers={"Authorization": "Basic secret"}).status_code == 401

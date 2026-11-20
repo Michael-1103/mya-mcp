@@ -1,5 +1,6 @@
-# Exemple simple (volume nommé). Définir MCP_AUTH_TOKEN dans l'environnement ou dans un fichier .env :
-#   export MCP_AUTH_TOKEN=$(openssl rand -hex 32)
+# Exemple simple (volume nommé). Variables obligatoires, dans l'environnement ou dans un fichier .env :
+#   export MCP_PASSWORD=$(openssl rand -hex 32)
+#   export PUBLIC_URL=https://mya-mcp.exemple.org
 #   docker compose up -d --build
 services:
   mya-mcp:
@@ -9,9 +10,11 @@ services:
     ports:
       - "${PORT:-8000}:8000"
     environment:
-      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?Définir MCP_AUTH_TOKEN (openssl rand -hex 32)}
+      MCP_PASSWORD: ${MCP_PASSWORD:?Définir MCP_PASSWORD (openssl rand -hex 32)}
+      PUBLIC_URL: ${PUBLIC_URL:?Définir PUBLIC_URL (URL https publique du serveur)}
       REFRESH_HOUR_UTC: ${REFRESH_HOUR_UTC:-3}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}
     volumes:
       - mya-data:/data
 
