@@ -1,28 +1,43 @@
-# MYA-MCP
+<h1 align="center">MYA-MCP</h1>
 
-Serveur [MCP](https://modelcontextprotocol.io) (Model Context Protocol) qui expose les destinations internationales partenaires de [mya.epitech.eu](https://mya.epitech.eu) à un assistant IA : recherche plein texte, filtres structurés, fiches complètes, comparaison et suivi des changements.
+<p align="center">
+  Un serveur <a href="https://modelcontextprotocol.io">MCP</a> pour explorer les destinations internationales de <a href="https://mya.epitech.eu">mya.epitech.eu</a> depuis votre assistant IA.
+</p>
 
-Les données sont récupérées automatiquement depuis l'API JSON publique de MYA, stockées dans une base SQLite locale (FTS5) et rafraîchies chaque jour. Le serveur tourne dans un seul conteneur Docker et s'utilise comme **connecteur personnalisé de Claude.ai** ou comme serveur MCP de Claude Code, avec une authentification OAuth 2.1 mono-utilisateur (un mot de passe, une page de connexion).
+<p align="center">
+  <a href="LICENSE"><img alt="Licence MIT" src="https://img.shields.io/badge/licence-MIT-green.svg"></a>
+  <img alt="Python 3.12" src="https://img.shields.io/badge/python-3.12-blue.svg">
+  <img alt="MCP streamable HTTP" src="https://img.shields.io/badge/MCP-streamable%20HTTP-8A2BE2.svg">
+  <img alt="OAuth 2.1" src="https://img.shields.io/badge/auth-OAuth%202.1-orange.svg">
+  <img alt="Docker" src="https://img.shields.io/badge/docker-pr%C3%AAt-2496ED.svg">
+</p>
+
+MYA-MCP récupère chaque jour les fiches des universités partenaires publiées sur MYA, les indexe dans une base SQLite (FTS5) et les expose à un assistant IA : recherche plein texte, filtres structurés, fiches complètes, comparaison et suivi des changements. Il s'utilise comme **connecteur personnalisé de Claude.ai**, dans **Claude Code** ou avec tout client MCP compatible.
+
+Exemples de questions que l'on peut ensuite poser à son assistant :
+
+- « Quelles destinations en Pologne sont sans surcoût ? »
+- « Compare AGH, Gdansk et Wroclaw : places, GPA, semestre. »
+- « Trouve une université anglophone avec une spécialisation en sécurité et un GPA exigé inférieur à 12. »
+- « Qu'est-ce qui a changé sur MYA cette semaine ? »
 
 > Projet indépendant, non affilié à Epitech. Il s'appuie sur une API non documentée officiellement (voir [Limites](#limites)).
 
 ## Sommaire
 
 - [Fonctionnalités](#fonctionnalités)
+- [Démarrage rapide](#démarrage-rapide-docker)
 - [Architecture](#architecture)
-- [Prérequis](#prérequis)
-- [Démarrage rapide (Docker)](#démarrage-rapide-docker)
 - [Variables d'environnement](#variables-denvironnement)
-- [Générer le mot de passe](#générer-le-mot-de-passe)
 - [Référence des outils MCP](#référence-des-outils-mcp)
-- [Connecter à Claude.ai](#connecter-à-claudeai)
-- [Connecter à Claude Code](#connecter-à-claude-code)
-- [Autres clients MCP](#autres-clients-mcp)
+- [Connecter à Claude.ai](#connecter-à-claudeai) · [à Claude Code](#connecter-à-claude-code) · [à un autre client](#autres-clients-mcp)
+- [Déploiement en production](#déploiement-en-production)
 - [Refresh quotidien et historique des changements](#refresh-quotidien-et-historique-des-changements)
 - [Sécurité](#sécurité)
 - [Sauvegarde du volume](#sauvegarde-du-volume)
 - [Dépannage](#dépannage)
 - [Développement local et tests](#développement-local-et-tests)
+- [Contribuer](#contribuer)
 - [Limites](#limites)
 - [Licence](#licence)
 
@@ -90,7 +105,7 @@ Dockerfile, docker-compose.yml, requirements.txt, .env.example
 Avec Docker Compose :
 
 ```bash
-git clone <url-du-depot> mya-mcp && cd mya-mcp
+git clone https://github.com/Michael-1103/mya-mcp.git && cd mya-mcp
 export MCP_PASSWORD=$(openssl rand -hex 32)
 export PUBLIC_URL=https://mya-mcp.exemple.org     # l'URL publique finale (https, sans chemin)
 echo "Mot de passe : $MCP_PASSWORD"                # à noter, il sera demandé à la connexion
@@ -302,6 +317,20 @@ Puis, dans une session Claude Code, tapez `/mcp`, choisissez `mya` et **Authenti
 
 Tout client MCP qui supporte le transport streamable HTTP et l'autorisation MCP (OAuth 2.1, découverte RFC 9728, DCR, PKCE S256) convient : URL `https://<domaine>/mcp`. Les redirections acceptées à l'enregistrement sont limitées aux callbacks Claude et à la boucle locale. Un client qui n'utiliserait qu'un redirect `https` vers un autre domaine sera refusé.
 
+## Déploiement en production
+
+Le serveur doit être joignable en HTTPS sur un domaine public (Claude.ai l'appelle depuis les serveurs d'Anthropic). Le principe est toujours le même : un conteneur, un volume sur `/data`, un reverse proxy qui termine le TLS vers le port 8000.
+
+Exemple avec Docker Compose et Caddy (`Caddyfile` minimal) :
+
+```
+mya-mcp.exemple.org {
+    reverse_proxy mya-mcp:8000
+}
+```
+
+Ne publiez pas le port 8000 en clair sur Internet (voir [Sécurité](#sécurité)).
+
 ## Refresh quotidien et historique des changements
 
 - **Au démarrage** : si la base n'existe pas ou date de plus de `MAX_AGE_HOURS` heures, un scrape est lancé en arrière-plan (le serveur répond déjà, `/health` indique `no_data` tant que ce n'est pas terminé).
@@ -367,17 +396,20 @@ Les tests couvrent la conversion HTML, la recherche et l'assainissement des requ
 
 Le SDK `mcp` est épinglé en 1.x (`mcp==1.30.0`) : la branche 2.x a renommé `FastMCP` en `MCPServer` et n'est pas supportée par ce code. Le module `oauth.py` applique deux petits ajustements au SDK (champ `client_secret` rendu optionnel pour `/revoke`, et méthode d'authentification `none` annoncée dans les métadonnées) ; à revérifier lors d'une mise à jour du SDK.
 
+## Contribuer
+
+Les contributions sont les bienvenues : corrections, nouveaux filtres, documentation. Ouvrez une issue avant un changement important, une pull request par sujet, avec des tests. Les règles détaillées sont dans [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Limites
 
 - L'API de mya.epitech.eu n'est pas une API publique documentée : son format ou son accès peuvent changer sans préavis, ce qui casserait le scrape (les garde-fous conservent alors les dernières données valides).
 - `spots` est le nombre de places **total** de la destination, pas le nombre de places restantes.
 - Les données ne sont fraîches qu'au rythme du refresh (quotidien). Les textes des fiches sont en anglais ou en français selon la destination.
-- Le nombre de destinations évolue avec le site (138 lors des tests).
+- Le nombre de destinations évolue avec le site (138 en novembre 2026).
 - Aucune donnée personnelle ni authentification Epitech : seules les informations publiques du site sont lues.
 - Un seul utilisateur et un seul mot de passe : pas de comptes multiples ni de gestion de rôles. Pas de page d'administration des clients autorisés (pour tout révoquer : supprimer `oauth.db`).
-- Le fonctionnement avec le vrai Claude.ai n'a pas pu être testé de bout en bout par l'auteur lors du développement (il faut un domaine public) ; le flux a été validé avec le client OAuth du SDK MCP et des tests automatisés.
 - Respectez le site source : un scrape par jour avec 8 requêtes simultanées suffit.
 
 ## Licence
 
-[MIT](LICENSE).
+Distribué sous licence [MIT](LICENSE).
